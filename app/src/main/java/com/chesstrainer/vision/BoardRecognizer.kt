@@ -192,16 +192,25 @@ object BoardRecognizer {
     /**
      * Full recognition result: the 64-square board, plus the set of square
      * indices (same a8->h1 row-major convention as the board array) whose
-     * template match was a near-tie between the two closest candidates.
+     * template match was a near-tie ACROSS the empty/occupied boundary -
+     * i.e. the two closest candidates disagree on whether there's a piece
+     * there at all, and are close enough that it's a real coin flip.
      *
      * This matters because [BoardSanity.checkMoveConsistency] can only ever
      * validate an engine move against what WE recognized - if a genuinely
-     * occupied square (say a2) happens to be ambiguous between "pawn" and
-     * "empty" and loses the coin flip to "empty", the move-consistency check
-     * sees a self-consistent (but wrong) board and waves an otherwise
-     * impossible move through. Surfacing which squares were a near-tie lets
-     * the caller refuse to trust a suggestion that hinges on one of them,
-     * instead of silently guessing.
+     * occupied square (say a2) is ambiguous between "pawn" and "empty" and
+     * loses the coin flip to "empty", the move-consistency check sees a
+     * self-consistent (but wrong) board and waves an otherwise impossible
+     * slide through. Surfacing which squares were an empty-vs-occupied
+     * near-tie lets the caller refuse to trust a suggestion that hinges on
+     * one of them, instead of silently guessing.
+     *
+     * Deliberately narrower than "any near-tie": two different PIECE
+     * templates (say bishop vs queen) being close doesn't change whether a
+     * square blocks a slide, and that kind of tie is common background
+     * noise (lighting, a slightly imprecise calibration) that would
+     * otherwise make the overlay refuse to show anything most of the time.
+     * Only an empty/occupied disagreement is actually dangerous here.
      */
     data class Recognition(val board: Array<PieceClass>, val uncertainSquares: Set<Int>)
 
@@ -218,7 +227,7 @@ object BoardRecognizer {
             resultBoard[i] = best?.key ?: PieceClass.EMPTY_LIGHT
 
             val second = sorted.getOrNull(1)
-            if (best != null && second != null) {
+            if (best != null && second != null && best.key.isEmpty != second.key.isEmpty) {
                 val bestD = distance(best.value, cells[i])
                 val secondD = distance(second.value, cells[i])
                 if (bestD > 0f && secondD < bestD * AMBIGUITY_RATIO) {
