@@ -16,13 +16,26 @@ package com.chesstrainer.vision
  */
 object BoardSanity {
 
-    /** Returns null if the board looks plausible enough to analyze, or a
-     * human-readable reason why it doesn't. */
-    fun checkPlausible(board: Array<PieceClass>): String? {
+    /**
+     * Returns null if the board looks plausible enough to analyze, or a
+     * human-readable reason why it doesn't.
+     *
+     * [uncertainSquares] (see BoardRecognizer.Recognition) are square indices
+     * where the closest two templates disagreed on whether the square is
+     * even occupied - i.e. one noisy frame's coin flip. Every check here
+     * excludes them rather than trusting whatever they happened to land on,
+     * since a single ambiguous square (not a real misread of the whole
+     * skin) was exactly what triggered false "pawn on the back rank" /
+     * king-count alarms on an otherwise perfectly normal position.
+     */
+    fun checkPlausible(board: Array<PieceClass>, uncertainSquares: Set<Int> = emptySet()): String? {
         require(board.size == 64)
 
         val counts = HashMap<PieceClass, Int>()
-        for (cls in board) counts[cls] = (counts[cls] ?: 0) + 1
+        for (i in board.indices) {
+            if (i in uncertainSquares) continue
+            counts[board[i]] = (counts[board[i]] ?: 0) + 1
+        }
 
         val whiteKings = counts[PieceClass.WHITE_KING] ?: 0
         val blackKings = counts[PieceClass.BLACK_KING] ?: 0
@@ -41,8 +54,11 @@ object BoardSanity {
 
         // Pawns on the back ranks are impossible in any legal chess position.
         for (col in 0 until 8) {
-            val top = board[col]        // row 0 = rank 8
-            val bottom = board[56 + col] // row 7 = rank 1
+            val topIdx = col        // row 0 = rank 8
+            val bottomIdx = 56 + col // row 7 = rank 1
+            if (topIdx in uncertainSquares || bottomIdx in uncertainSquares) continue
+            val top = board[topIdx]
+            val bottom = board[bottomIdx]
             if (top == PieceClass.WHITE_PAWN || top == PieceClass.BLACK_PAWN ||
                 bottom == PieceClass.WHITE_PAWN || bottom == PieceClass.BLACK_PAWN
             ) {

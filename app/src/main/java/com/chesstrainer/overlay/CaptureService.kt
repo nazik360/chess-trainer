@@ -205,7 +205,7 @@ class CaptureService : Service() {
                 val recognition = BoardRecognizer.recognizeBoardDetailed(this, frame, calib) ?: return@post
                 val board = recognition.board
 
-                val implausibleReason = com.chesstrainer.vision.BoardSanity.checkPlausible(board)
+                val implausibleReason = com.chesstrainer.vision.BoardSanity.checkPlausible(board, recognition.uncertainSquares)
                 if (implausibleReason != null) {
                     AnalysisBus.publish(AnalysisBus.State.Error(implausibleReason))
                     return@post
