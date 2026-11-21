@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Chess Trainer</string>
+    <string name="app_subtitle">Personal analysis overlay, powered by a local Stockfish engine. For training and post-game review - not for use during rated games.</string>
+
+    <string name="status_overlay">Overlay permission</string>
+    <string name="status_network">Engine network file</string>
+    <string name="status_calibration">Board calibration</string>
+
+    <string name="btn_overlay_permission">Grant overlay permission</string>
+    <string name="btn_download_net">Download engine network (~140 MB, once)</string>
+    <string name="btn_calibrate">Calibrate board</string>
+    <string name="btn_start_session">Start session</string>
+    <string name="btn_stop_session">Stop session</string>
+
+    <string name="calibration_hint">Opens your chess app, freezes a screenshot, and lets you mark the board\'s four corners.</string>
+    <string name="calibrate_instructions">Switch to your chess app, make sure it shows the board, then tap \"Calibrate\" on the floating control panel.</string>
+
+    <string name="need_overlay_permission">Grant the overlay permission first</string>
+    <string name="need_network_download">Download the engine network first</string>
+    <string name="need_calibration">Calibrate the board first</string>
+    <string name="net_already_downloaded">Network file already downloaded</string>
+    <string name="net_download_done">Engine network downloaded</string>
+    <string name="net_download_failed">Download failed: %1$s</string>
+    <string name="projection_denied">Screen capture permission was denied</string>
+    <string name="session_started">Session started - look for the floating controls</string>
+    <string name="capture_timeout">No screen frame captured yet - try again in a moment</string>
+
+    <string name="capture_notif_title">Chess Trainer is analyzing your screen</string>
+    <string name="capture_notif_text">Tap to open the app</string>
+    <string name="overlay_notif_title">Chess Trainer move overlay is active</string>
+
+    <string name="calibration_frame_missing">Could not load the screenshot - try calibrating again</string>
+    <string name="calibration_step1_instructions">Drag the four red handles onto the board\'s actual corners (top-left, top-right, bottom-right, bottom-left). Toggle the switch if black is shown at the bottom.</string>
+    <string name="switch_flipped">Black at bottom (flipped)</string>
+    <string name="btn_save_corners">Save corners</string>
+    <string name="corners_saved">Corners saved</string>
+    <string name="calibration_step2_instructions">Now make sure THIS screenshot shows the standard starting position (all 32 pieces on their home squares), then tap below.</string>
+    <string name="btn_capture_templates">Capture piece templates from this screenshot</string>
+    <string name="templates_captured">Piece templates captured - calibration complete</string>
+    <string name="templates_capture_failed">Failed to capture templates: %1$s</string>
+
+    <string name="ethics_note">Built for solo study and post-game analysis. Using any engine assistance during a rated game is cheating on virtually every chess platform and against over-the-board tournament rules - please don\'t use this overlay that way.</string>
+</resources>
