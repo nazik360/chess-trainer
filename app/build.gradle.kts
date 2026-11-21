@@ -44,7 +44,29 @@ android {
         }
     }
 
+    signingConfigs {
+        getByName("debug") {
+            // Without this, each machine (and every fresh GitHub Actions
+            // runner) auto-generates its OWN debug.keystore the first time
+            // it builds - so every CI build before this one was signed with
+            // a different, one-off key. Android refuses to install an
+            // "update" whose signature doesn't match the already-installed
+            // app, so every new APK required uninstalling the old one
+            // first. Pointing debug signing at this one committed keystore
+            // (committed on purpose - it's just the debug key, not a secret)
+            // makes every future build sign identically, so new APKs can
+            // install straight over the old one.
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
