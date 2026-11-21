@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PointF
 import android.os.Bundle
@@ -117,6 +118,17 @@ class CalibrationActivity : AppCompatActivity() {
         private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(200, 255, 220, 60); style = Paint.Style.STROKE; strokeWidth = 6f
         }
+        // Internal 8x8 grid preview - this is the whole point: the four corner
+        // handles alone give no feedback on whether each of the 64 cells
+        // actually lines up with a real square until it's too late (a
+        // misaligned calibration still LOOKS fine as 4 dots on the corners,
+        // but produces a board reading that's off by a row/column - see the
+        // "arrow points at the wrong piece" class of bug). Drawing the grid
+        // lines these corners imply lets you see that misalignment directly,
+        // as you drag, instead of discovering it later as a nonsense move.
+        private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(170, 50, 220, 255); style = Paint.Style.STROKE; strokeWidth = 2.5f
+        }
 
         init {
             layoutParams = android.widget.FrameLayout.LayoutParams(
@@ -145,8 +157,44 @@ class CalibrationActivity : AppCompatActivity() {
 
         fun cornersInImageSpace(): Array<PointF> = points
 
+        /** Maps the unit board space (file/rank 0..8 on each axis) onto the
+         * four current corner handles, in IMAGE pixel coordinates - the exact
+         * same perspective transform BoardRecognizer.warpToSquare uses (src =
+         * screen quad, dst = unit square), just inverted (src = unit square,
+         * dst = screen quad) since here we go the other direction: from a
+         * board-space grid line to where it falls on the screenshot. */
+        private fun boardToImageMatrix(): Matrix {
+            val src = floatArrayOf(0f, 0f, 8f, 0f, 8f, 8f, 0f, 8f)
+            val dst = floatArrayOf(
+                points[0].x, points[0].y,
+                points[1].x, points[1].y,
+                points[2].x, points[2].y,
+                points[3].x, points[3].y,
+            )
+            return Matrix().apply { setPolyToPoly(src, 0, dst, 0, 4) }
+        }
+
+        private fun drawGrid(canvas: Canvas) {
+            val m = boardToImageMatrix()
+            for (i in 0..8) {
+                val vPts = floatArrayOf(i.toFloat(), 0f, i.toFloat(), 8f)
+                m.mapPoints(vPts)
+                val v1 = imageToView(PointF(vPts[0], vPts[1]))
+                val v2 = imageToView(PointF(vPts[2], vPts[3]))
+                canvas.drawLine(v1.x, v1.y, v2.x, v2.y, gridPaint)
+
+                val hPts = floatArrayOf(0f, i.toFloat(), 8f, i.toFloat())
+                m.mapPoints(hPts)
+                val h1 = imageToView(PointF(hPts[0], hPts[1]))
+                val h2 = imageToView(PointF(hPts[2], hPts[3]))
+                canvas.drawLine(h1.x, h1.y, h2.x, h2.y, gridPaint)
+            }
+        }
+
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
+            drawGrid(canvas)
+
             val vp = points.map { imageToView(it) }
             for (i in vp.indices) {
                 val a = vp[i]

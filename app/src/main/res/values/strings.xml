@@ -31,7 +31,7 @@
     <string name="overlay_notif_title">Chess Trainer move overlay is active</string>
 
     <string name="calibration_frame_missing">Could not load the screenshot - try calibrating again</string>
-    <string name="calibration_step1_instructions">Drag the four red handles onto the board\'s actual corners (top-left, top-right, bottom-right, bottom-left). Toggle the switch if black is shown at the bottom.</string>
+    <string name="calibration_step1_instructions">Drag the four red handles onto the board\'s actual corners (top-left, top-right, bottom-right, bottom-left) - the outer edge of the a8/h8/h1/a1 squares themselves, NOT any file/rank letters or numbers next to the board. Check the blue grid lines: every line should run exactly along a real square edge, all the way to the far corner - if a line is off by even part of a square near one edge, nudge the nearest handle until it snaps into place. Toggle the switch if black is shown at the bottom.</string>
     <string name="switch_flipped">Black at bottom (flipped)</string>
     <string name="btn_save_corners">Save corners</string>
     <string name="corners_saved">Corners saved</string>
