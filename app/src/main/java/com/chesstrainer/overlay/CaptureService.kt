@@ -219,6 +219,15 @@ class CaptureService : Service() {
 
                 val from = result.bestMoveUci.substring(0, 2)
                 val to = result.bestMoveUci.substring(2, 4)
+
+                val inconsistencyReason = com.chesstrainer.vision.BoardSanity.checkMoveConsistency(
+                    board, from, to, SessionSettings.whiteToMove
+                )
+                if (inconsistencyReason != null) {
+                    AnalysisBus.publish(AnalysisBus.State.Error(inconsistencyReason))
+                    return@post
+                }
+
                 val fromPt = BoardRecognizer.squareCenterOnScreen(from, calib)
                 val toPt = BoardRecognizer.squareCenterOnScreen(to, calib)
 

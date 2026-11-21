@@ -53,4 +53,90 @@ object BoardSanity {
 
         return null
     }
+
+    /**
+     * Cross-checks the engine's suggested move against the SAME recognized
+     * board we sent it, independent of Stockfish's own (necessarily-legal
+     * relative to whatever FEN it was given) move generation. Stockfish can
+     * never emit a move that's illegal for the position it was handed - so if
+     * the suggested move looks physically impossible against what the board
+     * actually shows (a sliding piece gliding through an occupied square, a
+     * piece that belongs to the side NOT currently moving, a piece landing on
+     * one of its own side's squares), that is conclusive proof the FEN we
+     * built didn't match the real board - i.e. recognition drifted on at
+     * least one relevant square, even though cruder checks like
+     * [checkPlausible] didn't catch it (a uniform one-column/row misread, or
+     * one file quietly read as all-empty from a calibration edge sitting just
+     * outside the real board, both preserve piece counts while still
+     * producing exactly this kind of impossible move).
+     *
+     * Returns null if the move looks consistent with [board], or a reason why
+     * it doesn't.
+     */
+    fun checkMoveConsistency(board: Array<PieceClass>, fromSquare: String, toSquare: String, whiteToMove: Boolean): String? {
+        require(board.size == 64)
+
+        fun squareIndex(sq: String): Int {
+            val file = sq[0] - 'a'
+            val rank = sq[1] - '1'
+            return (7 - rank) * 8 + file
+        }
+
+        val fromIdx = squareIndex(fromSquare)
+        val toIdx = squareIndex(toSquare)
+        val mover = board[fromIdx]
+        val target = board[toIdx]
+
+        if (mover.isEmpty) {
+            return "Engine's move starts from $fromSquare, but the recognized board has no piece there - " +
+                "recognition and the engine's position have drifted apart. Try recalibrating."
+        }
+
+        val moverIsWhite = mover.fenChar?.isUpperCase() == true
+        if (moverIsWhite != whiteToMove) {
+            return "Engine's move ($fromSquare-$toSquare) moves a ${if (moverIsWhite) "white" else "black"} piece, " +
+                "but it's set to ${if (whiteToMove) "White" else "Black"} to move - recognition likely misread " +
+                "a piece's color, or the side-to-move toggle doesn't match the real board. Check the toggle " +
+                "and/or try recalibrating."
+        }
+
+        if (!target.isEmpty) {
+            val targetIsWhite = target.fenChar?.isUpperCase() == true
+            if (targetIsWhite == moverIsWhite) {
+                return "Engine's move ($fromSquare-$toSquare) would capture a piece of the SAME color on " +
+                    "$toSquare, which is impossible - recognition has likely misread this board. Try recalibrating."
+            }
+        }
+
+        // Sliding pieces (rook/bishop/queen): the real board must have a clear
+        // path - a piece can never be recognized as legally "jumping" another
+        // for Stockfish to have offered this move, so an occupied square in
+        // between is conclusive evidence of a misread, not a quirky engine choice.
+        val isSlider = mover == PieceClass.WHITE_ROOK || mover == PieceClass.BLACK_ROOK ||
+            mover == PieceClass.WHITE_BISHOP || mover == PieceClass.BLACK_BISHOP ||
+            mover == PieceClass.WHITE_QUEEN || mover == PieceClass.BLACK_QUEEN
+        if (isSlider) {
+            val fromRow = fromIdx / 8
+            val fromCol = fromIdx % 8
+            val toRow = toIdx / 8
+            val toCol = toIdx % 8
+            val dRow = Integer.signum(toRow - fromRow)
+            val dCol = Integer.signum(toCol - fromCol)
+            var row = fromRow + dRow
+            var col = fromCol + dCol
+            while (row != toRow || col != toCol) {
+                if (row !in 0..7 || col !in 0..7) break // shouldn't happen for a real sliding move
+                if (!board[row * 8 + col].isEmpty) {
+                    return "Engine's move ($fromSquare-$toSquare) would slide straight through an occupied " +
+                        "square - impossible for a real position. Recognition has misread at least one square " +
+                        "on that line (often an edge file/rank read as empty from an imprecise calibration). " +
+                        "Try recalibrating with the corner grid lines snapped exactly to the board's edges."
+                }
+                row += dRow
+                col += dCol
+            }
+        }
+
+        return null
+    }
 }
