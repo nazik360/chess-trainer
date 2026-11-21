@@ -212,31 +212,45 @@ class CaptureService : Service() {
                 }
 
                 val fen = FenBuilder.build(board, SessionSettings.whiteToMove)
-                val result = engine?.analyzeFen(fen, SessionSettings.moveTimeMs)
-                if (result == null) {
+                val candidates = engine?.analyzeFenCandidates(fen, SessionSettings.moveTimeMs) ?: emptyList()
+                if (candidates.isEmpty()) {
                     AnalysisBus.publish(AnalysisBus.State.Error("Engine returned no move for this position (it may have crashed - check the app's earlier setup steps, or try recalibrating)"))
                     return@post
                 }
 
-                val from = result.bestMoveUci.substring(0, 2)
-                val to = result.bestMoveUci.substring(2, 4)
+                // The engine's top choice might get rejected by
+                // checkMoveConsistency (it only ever knows what WE
+                // recognized, which can be wrong on a specific square) -
+                // rather than showing nothing, fall through its next-best
+                // ranked alternatives (see EngineProcess.analyzeFenCandidates)
+                // until one actually looks consistent with our own board.
+                var lastReason: String? = null
+                for (result in candidates) {
+                    val from = result.bestMoveUci.substring(0, 2)
+                    val to = result.bestMoveUci.substring(2, 4)
 
-                val inconsistencyReason = com.chesstrainer.vision.BoardSanity.checkMoveConsistency(
-                    board, from, to, SessionSettings.whiteToMove, recognition.uncertainSquares
-                )
-                if (inconsistencyReason != null) {
-                    AnalysisBus.publish(AnalysisBus.State.Error(inconsistencyReason))
-                    return@post
+                    val inconsistencyReason = com.chesstrainer.vision.BoardSanity.checkMoveConsistency(
+                        board, from, to, SessionSettings.whiteToMove, recognition.uncertainSquares
+                    )
+                    if (inconsistencyReason == null) {
+                        val fromPt = BoardRecognizer.squareCenterOnScreen(from, calib)
+                        val toPt = BoardRecognizer.squareCenterOnScreen(to, calib)
+                        AnalysisBus.publish(
+                            AnalysisBus.State.Ready(
+                                AnalysisBus.Suggestion(from, to, fromPt, toPt, result.scoreCp, result.scoreMate, result.depth)
+                            )
+                        )
+                        return@post
+                    }
+                    lastReason = inconsistencyReason
                 }
 
-                val fromPt = BoardRecognizer.squareCenterOnScreen(from, calib)
-                val toPt = BoardRecognizer.squareCenterOnScreen(to, calib)
-
-                AnalysisBus.publish(
-                    AnalysisBus.State.Ready(
-                        AnalysisBus.Suggestion(from, to, fromPt, toPt, result.scoreCp, result.scoreMate, result.depth)
-                    )
-                )
+                // Every candidate (top ${candidates.size}) failed the check -
+                // genuinely nothing trustworthy to show this frame.
+                AnalysisBus.publish(AnalysisBus.State.Error(
+                    "${candidates.size} candidate move(s) all looked inconsistent with the recognized board. " +
+                        "Last reason: $lastReason"
+                ))
             } catch (e: Exception) {
                 Log.e(TAG, "Analysis failed", e)
                 val message = e.message ?: "analysis failed"

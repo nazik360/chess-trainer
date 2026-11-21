@@ -94,6 +94,12 @@ class EngineProcess(private val context: Context) {
             val netFile = NetworkManager.networkFile(context)
             send("setoption name EvalFile value ${netFile.absolutePath}")
             send("setoption name Threads value ${recommendedThreads()}")
+            // Keep a few alternative candidate moves available (see
+            // analyzeFenCandidates) - if our own recognition isn't confident
+            // the top move is legal on the real board, we can fall back to
+            // the engine's 2nd/3rd choice instead of just refusing to show
+            // anything.
+            send("setoption name MultiPV value $MULTI_PV")
             // Kept modest on purpose: the NNUE network itself already uses a
             // meaningful chunk of memory, and a phone under memory pressure
             // will have Android's low-memory killer terminate this background
@@ -126,45 +132,53 @@ class EngineProcess(private val context: Context) {
      * FenBuilder) and searches for [moveTimeMs] milliseconds, returning the
      * best move found. Blocking - call off the main thread.
      */
-    fun analyzeFen(fen: String, moveTimeMs: Int = 1200): AnalysisResult? {
-        if (!running) return null
+    fun analyzeFen(fen: String, moveTimeMs: Int = 1200): AnalysisResult? =
+        analyzeFenCandidates(fen, moveTimeMs).firstOrNull()
+
+    /**
+     * Same search as [analyzeFen], but returns up to [MULTI_PV] candidate
+     * moves (the engine's own ranked alternatives, via the UCI "MultiPV"
+     * option set in [start]) instead of only the single best one, ordered
+     * best-first.
+     *
+     * Why this exists: [com.chesstrainer.vision.BoardSanity.checkMoveConsistency]
+     * can reject the top move as inconsistent with our own recognized board
+     * (an occupied square we're not confident about, say). Previously that
+     * meant showing nothing at all for that frame. Now the caller can fall
+     * back to the engine's 2nd or 3rd choice instead - still a real
+     * Stockfish-ranked move for this exact position, just not its favorite -
+     * and only give up if every candidate fails the check.
+     */
+    fun analyzeFenCandidates(fen: String, moveTimeMs: Int = 1200): List<AnalysisResult> {
+        if (!running) return emptyList()
         send("position fen $fen")
         send("go movetime $moveTimeMs")
 
-        var depth = 0
-        var scoreCp: Int? = null
-        var scoreMate: Int? = null
-        var pv: List<String> = emptyList()
-        var bestMove: String? = null
-        var ponder: String? = null
+        // multipv index -> latest (depth, scoreCp, scoreMate, pv) for that line.
+        val pvState = HashMap<Int, InfoTuple>()
+        var sawBestMove = false
 
         val deadline = System.currentTimeMillis() + moveTimeMs + 5_000
-        val reader = process?.inputStream?.bufferedReader() ?: return null
 
-        // We attach one persistent reader thread in readLoop(); here we just
-        // poll the latest parsed state via the shared fields below. To keep
-        // this class simple and dependency-free we instead do a direct
-        // synchronous read loop scoped to this call.
         while (System.currentTimeMillis() < deadline) {
             val line = pendingLines.poll() ?: run { Thread.sleep(5); null } ?: continue
-            if (line.startsWith("info ")) {
+            if (line.startsWith("info ") && line.contains(" pv ")) {
+                val tokens = line.trim().split(" ")
+                val multiPvIdx = tokens.indexOf("multipv").let { i -> if (i >= 0) tokens.getOrNull(i + 1)?.toIntOrNull() ?: 1 else 1 }
                 parseInfoLine(line)?.let { info ->
-                    depth = info.first
-                    scoreCp = info.second
-                    scoreMate = info.third
-                    if (info.fourth.isNotEmpty()) pv = info.fourth
+                    if (info.fourth.isNotEmpty()) pvState[multiPvIdx] = info
                 }
             } else if (line.startsWith("bestmove")) {
-                val parts = line.trim().split(" ")
-                bestMove = parts.getOrNull(1)
-                val ponderIdx = parts.indexOf("ponder")
-                ponder = if (ponderIdx >= 0) parts.getOrNull(ponderIdx + 1) else null
+                sawBestMove = true
                 break
             }
         }
+        if (!sawBestMove && pvState.isEmpty()) return emptyList()
 
-        val bm = bestMove ?: return null
-        return AnalysisResult(bm, ponder, scoreCp, scoreMate, depth, pv)
+        return pvState.entries.sortedBy { it.key }.mapNotNull { (_, info) ->
+            val mv = info.fourth.firstOrNull() ?: return@mapNotNull null
+            AnalysisResult(mv, null, info.second, info.third, info.first, info.fourth)
+        }
     }
 
     // depth, scoreCp, scoreMate, pv
@@ -270,5 +284,6 @@ class EngineProcess(private val context: Context) {
 
     companion object {
         private const val TAG = "EngineProcess"
+        private const val MULTI_PV = 3
     }
 }
