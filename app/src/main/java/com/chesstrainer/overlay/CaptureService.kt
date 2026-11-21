@@ -133,7 +133,7 @@ class CaptureService : Service() {
                 engine = e
                 engineReady = true
             } else {
-                AnalysisBus.publish(AnalysisBus.State.Error("Failed to start the engine process"))
+                AnalysisBus.publish(AnalysisBus.State.Error(e.lastError ?: "Failed to start the engine process (no further detail available)"))
             }
         }
     }

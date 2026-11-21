@@ -201,7 +201,7 @@ class OverlayService : Service() {
             when (val s = state) {
                 is AnalysisBus.State.Ready -> drawArrow(canvas, s.suggestion)
                 is AnalysisBus.State.Thinking -> canvas.drawText("Thinking…", 24f, 220f, textPaint)
-                is AnalysisBus.State.Error -> canvas.drawText("⚠ ${s.message}", 24f, 220f, textPaint)
+                is AnalysisBus.State.Error -> drawWrappedError(canvas, "⚠ ${s.message}")
                 AnalysisBus.State.Idle -> {}
             }
         }
@@ -226,6 +226,32 @@ class OverlayService : Service() {
                 else -> ""
             }
             canvas.drawText("${s.fromSquare}-${s.toSquare}  $evalText  (d${s.depth})", 24f, 220f, textPaint)
+        }
+
+        /** Error messages can be long (we now surface the real exception/reason -
+         * see EngineProcess.lastError) - wrap them across multiple lines instead
+         * of letting drawText run off the right edge of the screen. */
+        private fun drawWrappedError(canvas: android.graphics.Canvas, message: String) {
+            val maxWidth = (width - 48).coerceAtLeast(200)
+            val words = message.split(" ")
+            val lines = mutableListOf<String>()
+            var current = StringBuilder()
+            for (word in words) {
+                val candidate = if (current.isEmpty()) word else "$current $word"
+                if (textPaint.measureText(candidate) > maxWidth && current.isNotEmpty()) {
+                    lines.add(current.toString())
+                    current = StringBuilder(word)
+                } else {
+                    current = StringBuilder(candidate)
+                }
+            }
+            if (current.isNotEmpty()) lines.add(current.toString())
+
+            var y = 220f
+            for (line in lines) {
+                canvas.drawText(line, 24f, y, textPaint)
+                y += textPaint.textSize + 8f
+            }
         }
     }
 

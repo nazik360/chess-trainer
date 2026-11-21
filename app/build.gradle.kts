@@ -24,7 +24,14 @@ android {
 
         externalNativeBuild {
             cmake {
-                arguments += listOf("-DANDROID_STL=c++_shared")
+                // c++_static (not c++_shared): stockfish-engine is a real
+                // subprocess executable, not a JNI library Android dlopen()s,
+                // so there's no benefit to a shared libc++.so and it's one
+                // less thing that can go wrong (a missing/mismatched
+                // libc++_shared.so alongside it at run time, which shows up
+                // as a silent "failed to start the engine process").
+                // Statically linking it makes the binary fully self-contained.
+                arguments += listOf("-DANDROID_STL=c++_static")
                 cppFlags += listOf("-std=c++17")
             }
         }

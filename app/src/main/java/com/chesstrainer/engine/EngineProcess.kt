@@ -32,13 +32,35 @@ class EngineProcess(private val context: Context) {
 
     @Volatile private var running = false
 
-    /** Starts the subprocess and performs the UCI handshake. Blocking - call off the main thread. */
+    /** Set by [start] when it returns false, so callers can surface a real reason
+     * instead of a generic "failed to start" message. */
+    var lastError: String? = null
+        private set
+
+    /** Starts the subprocess and performs the UCI handshake. Blocking - call off the main thread.
+     * On failure, check [lastError] for why. */
     fun start(): Boolean {
+        lastError = null
         val binary = File(context.applicationInfo.nativeLibraryDir, "libstockfish-engine.so")
         if (!binary.exists()) {
-            Log.e(TAG, "Engine binary missing at ${binary.absolutePath}")
+            lastError = "Engine binary missing at ${binary.absolutePath} - nativeLibraryDir contents: " +
+                (binary.parentFile?.list()?.joinToString() ?: "parentFile is null/unreadable")
+            Log.e(TAG, lastError!!)
             return false
         }
+        if (!binary.canExecute()) {
+            // Legacy packaging should extract it with the exec bit already set,
+            // but some OEM ROMs/installers have been seen to drop it - try to
+            // fix it up ourselves before giving up.
+            binary.setExecutable(true, false)
+        }
+        if (!binary.canExecute()) {
+            lastError = "Engine binary at ${binary.absolutePath} is not executable " +
+                "(size=${binary.length()} bytes) - the OS wouldn't let us set the exec bit either"
+            Log.e(TAG, lastError!!)
+            return false
+        }
+
         return try {
             val pb = ProcessBuilder(binary.absolutePath)
             pb.redirectErrorStream(true)
@@ -47,8 +69,27 @@ class EngineProcess(private val context: Context) {
             writer = OutputStreamWriter(process!!.outputStream)
             running = true
 
+            // Give a crashing/incompatible binary (e.g. ABI/ISA mismatch -
+            // "Exec format error", or a missing dynamic dependency) a brief
+            // moment to die before we start waiting on handshake tokens that
+            // will otherwise just time out silently.
+            Thread.sleep(200)
+            if (process?.isAlive == false) {
+                val exit = process?.exitValue()
+                val output = try { process?.inputStream?.bufferedReader()?.readText() } catch (_: Exception) { null }
+                lastError = "Engine process exited immediately (exit code $exit)." +
+                    (if (!output.isNullOrBlank()) " Output: $output" else " No output captured - likely incompatible CPU architecture for this build (check: device ABI vs app/build.gradle.kts ndk.abiFilters).")
+                Log.e(TAG, lastError!!)
+                return false
+            }
+
             send("uci")
-            waitFor("uciok", timeoutMs = 10_000)
+            if (!waitFor("uciok", timeoutMs = 10_000)) {
+                lastError = "Engine did not respond with 'uciok' within 10s " +
+                    "(process alive=${process?.isAlive}) - binary may be incompatible with this device's CPU"
+                Log.e(TAG, lastError!!)
+                return false
+            }
 
             val netFile = NetworkManager.networkFile(context)
             send("setoption name EvalFile value ${netFile.absolutePath}")
@@ -56,9 +97,15 @@ class EngineProcess(private val context: Context) {
             send("setoption name Hash value 128")
 
             send("isready")
-            waitFor("readyok", timeoutMs = 10_000)
+            if (!waitFor("readyok", timeoutMs = 10_000)) {
+                lastError = "Engine did not respond with 'readyok' within 10s " +
+                    "(process alive=${process?.isAlive}) - check the NNUE network file is valid: ${netFile.absolutePath} (exists=${netFile.exists()}, size=${netFile.length()})"
+                Log.e(TAG, lastError!!)
+                return false
+            }
             true
         } catch (e: Exception) {
+            lastError = "${e.javaClass.simpleName}: ${e.message}"
             Log.e(TAG, "Failed to start engine", e)
             false
         }
@@ -172,12 +219,14 @@ class EngineProcess(private val context: Context) {
         }
     }
 
-    private fun waitFor(token: String, timeoutMs: Long) {
+    /** Returns true if [token] was seen within [timeoutMs], false on timeout. */
+    private fun waitFor(token: String, timeoutMs: Long): Boolean {
         val latch = java.util.concurrent.CountDownLatch(1)
         val waiter: (String) -> Unit = { line -> if (line.contains(token)) latch.countDown() }
         synchronized(waiters) { waiters.add(waiter) }
-        latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        val got = latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
         synchronized(waiters) { waiters.remove(waiter) }
+        return got
     }
 
     fun stop() {
