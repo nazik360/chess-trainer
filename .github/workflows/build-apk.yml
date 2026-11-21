@@ -23,13 +23,16 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
+      # ubuntu-latest runners already ship a full Android SDK (cmdline-tools,
+      # platform-tools, several platforms/build-tools) at $ANDROID_HOME -
+      # https://github.com/actions/runner-images. We just need to point
+      # Gradle/AGP at it and install the one extra piece it doesn't
+      # pre-install: the NDK (+ the matching CMake).
       - name: Install NDK + CMake
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install "ndk;26.3.11579264" "cmake;3.22.1"
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.3.11579264" "cmake;3.22.1"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
