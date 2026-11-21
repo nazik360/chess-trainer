@@ -138,6 +138,37 @@ class CaptureService : Service() {
         }
     }
 
+    private var restartAttempts = 0
+
+    /** Called from maybeAnalyze's catch block when the engine process has died
+     * mid-session (e.g. OOM-killed, or crashed on a bad position). Restarts it
+     * once per failure (capped, so a persistently broken setup doesn't loop
+     * forever) rather than requiring the user to fully restart the app. */
+    private fun restartEngineAsync(reason: String) {
+        engineReady = false
+        if (restartAttempts >= MAX_RESTART_ATTEMPTS) {
+            AnalysisBus.publish(AnalysisBus.State.Error(
+                "$reason\n\nGave up restarting the engine after $MAX_RESTART_ATTEMPTS attempts - stop and restart the session from the app."
+            ))
+            return
+        }
+        restartAttempts++
+        workerHandler.post {
+            engine?.stop()
+            val e = EngineProcess(this)
+            if (e.start()) {
+                engine = e
+                engineReady = true
+                restartAttempts = 0
+                Log.i(TAG, "Engine restarted after: $reason")
+            } else {
+                AnalysisBus.publish(AnalysisBus.State.Error(
+                    "$reason\n\nRestart also failed: ${e.lastError ?: "unknown reason"}"
+                ))
+            }
+        }
+    }
+
     private fun captureFrame() {
         val reader = imageReader ?: return
         val image = try { reader.acquireLatestImage() } catch (e: Exception) { null } ?: return
@@ -172,8 +203,19 @@ class CaptureService : Service() {
             try {
                 AnalysisBus.publish(AnalysisBus.State.Thinking)
                 val board = BoardRecognizer.recognizeBoard(this, frame, calib) ?: return@post
+
+                val implausibleReason = com.chesstrainer.vision.BoardSanity.checkPlausible(board)
+                if (implausibleReason != null) {
+                    AnalysisBus.publish(AnalysisBus.State.Error(implausibleReason))
+                    return@post
+                }
+
                 val fen = FenBuilder.build(board, SessionSettings.whiteToMove)
-                val result = engine?.analyzeFen(fen, SessionSettings.moveTimeMs) ?: return@post
+                val result = engine?.analyzeFen(fen, SessionSettings.moveTimeMs)
+                if (result == null) {
+                    AnalysisBus.publish(AnalysisBus.State.Error("Engine returned no move for this position (it may have crashed - check the app's earlier setup steps, or try recalibrating)"))
+                    return@post
+                }
 
                 val from = result.bestMoveUci.substring(0, 2)
                 val to = result.bestMoveUci.substring(2, 4)
@@ -187,7 +229,15 @@ class CaptureService : Service() {
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Analysis failed", e)
-                AnalysisBus.publish(AnalysisBus.State.Error(e.message ?: "analysis failed"))
+                val message = e.message ?: "analysis failed"
+                if (engine?.isRunning != true) {
+                    // The engine process itself died (crash, OOM-kill, etc.) -
+                    // try to bring it back instead of just reporting the error
+                    // forever on every future frame.
+                    restartEngineAsync(message)
+                } else {
+                    AnalysisBus.publish(AnalysisBus.State.Error(message))
+                }
             }
         }
     }
@@ -228,6 +278,7 @@ class CaptureService : Service() {
     companion object {
         private const val TAG = "CaptureService"
         private const val NOTIF_ID = 42
+        private const val MAX_RESTART_ATTEMPTS = 3
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_RESULT_DATA = "result_data"
 

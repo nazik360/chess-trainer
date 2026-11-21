@@ -94,7 +94,14 @@ class EngineProcess(private val context: Context) {
             val netFile = NetworkManager.networkFile(context)
             send("setoption name EvalFile value ${netFile.absolutePath}")
             send("setoption name Threads value ${recommendedThreads()}")
-            send("setoption name Hash value 128")
+            // Kept modest on purpose: the NNUE network itself already uses a
+            // meaningful chunk of memory, and a phone under memory pressure
+            // will have Android's low-memory killer terminate this background
+            // subprocess outright (which surfaces as a confusing "Stream
+            // closed" the next time we try to talk to it) rather than fail
+            // gracefully. A short per-move think time doesn't benefit much
+            // from a bigger hash table anyway.
+            send("setoption name Hash value 64")
 
             send("isready")
             if (!waitFor("readyok", timeoutMs = 10_000)) {
@@ -187,6 +194,11 @@ class EngineProcess(private val context: Context) {
     }
 
     private val pendingLines = java.util.concurrent.ConcurrentLinkedQueue<String>()
+    // Rolling tail of everything the engine has printed (stdout+stderr, merged -
+    // see redirectErrorStream(true) in start()), so if it dies mid-session we can
+    // report *why* instead of just the generic "Stream closed" Java throws when
+    // you write to a dead process's stdin pipe.
+    private val recentOutput = java.util.Collections.synchronizedList(mutableListOf<String>())
     private var readerThread: Thread? = null
 
     private fun ensureReaderThread() {
@@ -198,24 +210,42 @@ class EngineProcess(private val context: Context) {
                 while (true) {
                     val line = br.readLine() ?: break
                     pendingLines.add(line)
+                    synchronized(recentOutput) {
+                        recentOutput.add(line)
+                        if (recentOutput.size > 50) recentOutput.removeAt(0)
+                    }
                     synchronized(waiters) {
                         waiters.forEach { it(line) }
                     }
                 }
             } catch (_: Exception) {
-                // process died / stream closed
+                // process died / stream closed - nothing more to read
             }
         }.also { it.isDaemon = true; it.start() }
     }
 
     private val waiters = mutableListOf<(String) -> Unit>()
 
+    /** True once start() has returned true and the process hasn't since died. */
+    val isRunning: Boolean get() = running && process?.isAlive == true
+
     private fun send(command: String) {
         ensureReaderThread()
-        writer?.apply {
-            write(command)
-            write("\n")
-            flush()
+        try {
+            writer?.apply {
+                write(command)
+                write("\n")
+                flush()
+            }
+        } catch (e: Exception) {
+            running = false
+            val exit = try { process?.exitValue() } catch (_: Exception) { null }
+            val tail = synchronized(recentOutput) { recentOutput.joinToString("\n") }
+            throw IllegalStateException(
+                "Engine process died while sending '$command' (exit code $exit). " +
+                    if (tail.isNotBlank()) "Last engine output:\n$tail" else "No output was captured before it died.",
+                e,
+            )
         }
     }
 
