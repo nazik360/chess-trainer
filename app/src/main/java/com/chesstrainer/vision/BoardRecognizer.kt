@@ -134,15 +134,53 @@ object BoardRecognizer {
 
     /** Recognizes the live board using the stored templates. Returns null if
      * templates haven't been captured yet. */
-    fun recognizeBoard(context: Context, screenshot: Bitmap, calib: Calibration): Array<PieceClass>? {
+    fun recognizeBoard(context: Context, screenshot: Bitmap, calib: Calibration): Array<PieceClass>? =
+        recognizeBoardDetailed(context, screenshot, calib)?.board
+
+    // If the second-closest template is within this fraction of the closest
+    // template's own distance, the match is a near-tie: recognition genuinely
+    // can't confidently tell which piece (or whether the square is empty) is
+    // shown there, as opposed to a clear, well-separated match.
+    private const val AMBIGUITY_RATIO = 1.15f
+
+    /**
+     * Full recognition result: the 64-square board, plus the set of square
+     * indices (same a8->h1 row-major convention as the board array) whose
+     * template match was a near-tie between the two closest candidates.
+     *
+     * This matters because [BoardSanity.checkMoveConsistency] can only ever
+     * validate an engine move against what WE recognized - if a genuinely
+     * occupied square (say a2) happens to be ambiguous between "pawn" and
+     * "empty" and loses the coin flip to "empty", the move-consistency check
+     * sees a self-consistent (but wrong) board and waves an otherwise
+     * impossible move through. Surfacing which squares were a near-tie lets
+     * the caller refuse to trust a suggestion that hinges on one of them,
+     * instead of silently guessing.
+     */
+    data class Recognition(val board: Array<PieceClass>, val uncertainSquares: Set<Int>)
+
+    fun recognizeBoardDetailed(context: Context, screenshot: Bitmap, calib: Calibration): Recognition? {
         val templates = TemplateStore.load(context) ?: return null
         val board = warpToSquare(screenshot, calib)
         val cells = extractCellFeatures(board, calib.flipped)
 
-        return Array(64) { i ->
-            templates.entries.minByOrNull { (_, vec) -> distance(vec, cells[i]) }?.key
-                ?: PieceClass.EMPTY_LIGHT
+        val resultBoard = Array(64) { PieceClass.EMPTY_LIGHT }
+        val uncertain = mutableSetOf<Int>()
+        for (i in 0 until 64) {
+            val sorted = templates.entries.sortedBy { (_, vec) -> distance(vec, cells[i]) }
+            val best = sorted.getOrNull(0)
+            resultBoard[i] = best?.key ?: PieceClass.EMPTY_LIGHT
+
+            val second = sorted.getOrNull(1)
+            if (best != null && second != null) {
+                val bestD = distance(best.value, cells[i])
+                val secondD = distance(second.value, cells[i])
+                if (bestD > 0f && secondD < bestD * AMBIGUITY_RATIO) {
+                    uncertain.add(i)
+                }
+            }
         }
+        return Recognition(resultBoard, uncertain)
     }
 
     /**

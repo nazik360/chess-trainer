@@ -73,7 +73,13 @@ object BoardSanity {
      * Returns null if the move looks consistent with [board], or a reason why
      * it doesn't.
      */
-    fun checkMoveConsistency(board: Array<PieceClass>, fromSquare: String, toSquare: String, whiteToMove: Boolean): String? {
+    fun checkMoveConsistency(
+        board: Array<PieceClass>,
+        fromSquare: String,
+        toSquare: String,
+        whiteToMove: Boolean,
+        uncertainSquares: Set<Int> = emptySet(),
+    ): String? {
         require(board.size == 64)
 
         fun squareIndex(sq: String): Int {
@@ -86,6 +92,18 @@ object BoardSanity {
         val toIdx = squareIndex(toSquare)
         val mover = board[fromIdx]
         val target = board[toIdx]
+
+        // A near-tie match (see BoardRecognizer.Recognition) means we can't
+        // trust what this square actually shows - including whether it's
+        // empty. Refuse the move rather than reason about possibly-wrong
+        // data; this is what catches an occupied square that lost a close
+        // call to "empty" and let an otherwise-impossible slide look legal
+        // against our own (wrong) board.
+        if (fromIdx in uncertainSquares || toIdx in uncertainSquares) {
+            return "Recognition wasn't confident about $fromSquare or $toSquare (two piece templates matched " +
+                "almost equally well there) - too risky to trust this move. Try recalibrating with a clear, " +
+                "well-lit screenshot."
+        }
 
         if (mover.isEmpty) {
             return "Engine's move starts from $fromSquare, but the recognized board has no piece there - " +
@@ -126,7 +144,13 @@ object BoardSanity {
             var col = fromCol + dCol
             while (row != toRow || col != toCol) {
                 if (row !in 0..7 || col !in 0..7) break // shouldn't happen for a real sliding move
-                if (!board[row * 8 + col].isEmpty) {
+                val idx = row * 8 + col
+                if (idx in uncertainSquares) {
+                    return "Recognition wasn't confident about a square on the $fromSquare-$toSquare path " +
+                        "(two templates matched almost equally well there) - too risky to trust this slide. " +
+                        "Try recalibrating with a clear, well-lit screenshot."
+                }
+                if (!board[idx].isEmpty) {
                     return "Engine's move ($fromSquare-$toSquare) would slide straight through an occupied " +
                         "square - impossible for a real position. Recognition has misread at least one square " +
                         "on that line (often an edge file/rank read as empty from an imprecise calibration). " +

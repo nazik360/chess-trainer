@@ -74,17 +74,43 @@ class OverlayService : Service() {
             @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
 
     private fun addArrowOverlay() {
+        // MATCH_PARENT is sized against the window manager's "available"
+        // area, which on many OEM builds excludes the status bar (and
+        // sometimes the nav bar) - a few dozen pixels the MediaProjection
+        // capture (CaptureService, via getRealMetrics) does NOT exclude.
+        // That mismatch is exactly a constant "arrow is close but not quite
+        // on the piece" offset. Fix: size this window to the SAME real
+        // pixel dimensions CaptureService captures, anchored at the true
+        // (0,0) top-left corner, and tell it to ignore system bar/cutout
+        // insets entirely, so canvas pixel (x,y) here always means the same
+        // physical screen pixel as in the captured screenshot.
+        val metrics = android.util.DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealMetrics(metrics)
+
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
+            metrics.widthPixels,
+            metrics.heightPixels,
             overlayType(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         )
         params.gravity = Gravity.TOP or Gravity.START
+        params.x = 0
+        params.y = 0
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
         val view = ArrowView(this)
+        @Suppress("DEPRECATION")
+        view.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            )
         windowManager.addView(view, params)
         arrowView = view
     }

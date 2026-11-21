@@ -202,7 +202,8 @@ class CaptureService : Service() {
         workerHandler.post {
             try {
                 AnalysisBus.publish(AnalysisBus.State.Thinking)
-                val board = BoardRecognizer.recognizeBoard(this, frame, calib) ?: return@post
+                val recognition = BoardRecognizer.recognizeBoardDetailed(this, frame, calib) ?: return@post
+                val board = recognition.board
 
                 val implausibleReason = com.chesstrainer.vision.BoardSanity.checkPlausible(board)
                 if (implausibleReason != null) {
@@ -221,7 +222,7 @@ class CaptureService : Service() {
                 val to = result.bestMoveUci.substring(2, 4)
 
                 val inconsistencyReason = com.chesstrainer.vision.BoardSanity.checkMoveConsistency(
-                    board, from, to, SessionSettings.whiteToMove
+                    board, from, to, SessionSettings.whiteToMove, recognition.uncertainSquares
                 )
                 if (inconsistencyReason != null) {
                     AnalysisBus.publish(AnalysisBus.State.Error(inconsistencyReason))
