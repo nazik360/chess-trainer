@@ -39,6 +39,7 @@
     <string name="btn_capture_templates">Capture piece templates from this screenshot</string>
     <string name="templates_captured">Piece templates captured - calibration complete</string>
     <string name="templates_capture_failed">Failed to capture templates: %1$s</string>
+    <string name="templates_inverted_warning">This looks backwards (white pieces came out darker than black ones) - the \"Black at bottom\" switch probably doesn\'t match this screenshot. Toggle it on step 1 and capture again.</string>
 
     <string name="ethics_note">Built for solo study and post-game analysis. Using any engine assistance during a rated game is cheating on virtually every chess platform and against over-the-board tournament rules - please don\'t use this overlay that way.</string>
 </resources>

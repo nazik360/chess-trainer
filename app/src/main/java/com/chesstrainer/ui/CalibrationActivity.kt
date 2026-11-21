@@ -86,8 +86,18 @@ class CalibrationActivity : AppCompatActivity() {
     private fun onCaptureTemplatesClicked() {
         val calib = Calibration.load(this) ?: return
         try {
-            BoardRecognizer.captureTemplates(this, frame, calib)
-            Toast.makeText(this, R.string.templates_captured, Toast.LENGTH_SHORT).show()
+            val looksSane = BoardRecognizer.captureTemplates(this, frame, calib)
+            if (looksSane) {
+                Toast.makeText(this, R.string.templates_captured, Toast.LENGTH_SHORT).show()
+            } else {
+                // Don't just finish() silently here - this specific mistake
+                // produces a calibration that LOOKS successful (no crash, a
+                // normal grid) but will make every later move suggestion
+                // confident nonsense. Keep the user on this screen so they
+                // actually see it instead of only finding out mid-game.
+                Toast.makeText(this, R.string.templates_inverted_warning, Toast.LENGTH_LONG).show()
+                return
+            }
             finish()
         } catch (e: Exception) {
             Toast.makeText(this, getString(R.string.templates_capture_failed, e.message), Toast.LENGTH_LONG).show()

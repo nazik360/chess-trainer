@@ -110,8 +110,22 @@ object BoardRecognizer {
      * Call this once during calibration, with a screenshot of the STANDARD
      * STARTING POSITION correctly aligned to the calibrated corners. Builds
      * and persists one averaged template per piece class.
+     *
+     * Returns true if the captured templates look sane, false if they look
+     * color-inverted (see [looksColorInverted]) - almost always because the
+     * "Black at bottom" toggle didn't match the screenshot's real
+     * orientation. That specific mistake is dangerous because it doesn't
+     * just swap black/white: since the queen and king aren't mirror images
+     * of each other across the board's center, a 180-degree mislabeling
+     * scrambles each template to an almost arbitrary OTHER piece class, not
+     * simply the opposite color. The result still "looks" calibrated - no
+     * crash, a normal-looking grid - but every move suggested afterwards can
+     * be confident, self-consistent nonsense (a pawn "capturing" a queen
+     * with promotion on move 2, etc.), which is exactly the class of bug
+     * none of the live move-validation checks can catch, since they can only
+     * check a move against what recognition itself believes.
      */
-    fun captureTemplates(context: Context, screenshot: Bitmap, calib: Calibration) {
+    fun captureTemplates(context: Context, screenshot: Bitmap, calib: Calibration): Boolean {
         val board = warpToSquare(screenshot, calib)
         val cells = extractCellFeatures(board, calib.flipped)
 
@@ -130,6 +144,38 @@ object BoardRecognizer {
             templates[cls] = FloatArray(acc.size) { acc[it] / c }
         }
         TemplateStore.save(context, templates)
+        return !looksColorInverted(templates)
+    }
+
+    /**
+     * On virtually every board skin, white piece glyphs render visibly
+     * lighter (on average) than black piece glyphs, regardless of the
+     * skin's particular color choices - it's the one thing "white" and
+     * "black" pieces reliably agree on. If the captured WHITE_* templates
+     * come out darker on average than the BLACK_* templates, that's a
+     * strong, skin-independent signal that templates got scrambled during
+     * capture (see [captureTemplates]).
+     */
+    private fun looksColorInverted(templates: Map<PieceClass, FloatArray>): Boolean {
+        fun avgLuminance(vararg classes: PieceClass): Float {
+            val vecs = classes.mapNotNull { templates[it] }
+            if (vecs.isEmpty()) return 0f
+            var sum = 0f
+            var n = 0
+            for (vec in vecs) {
+                for (i in 0 until GRID * GRID) { sum += vec[i]; n++ }
+            }
+            return if (n > 0) sum / n else 0f
+        }
+        val blackLum = avgLuminance(
+            PieceClass.BLACK_PAWN, PieceClass.BLACK_KNIGHT, PieceClass.BLACK_BISHOP,
+            PieceClass.BLACK_ROOK, PieceClass.BLACK_QUEEN, PieceClass.BLACK_KING,
+        )
+        val whiteLum = avgLuminance(
+            PieceClass.WHITE_PAWN, PieceClass.WHITE_KNIGHT, PieceClass.WHITE_BISHOP,
+            PieceClass.WHITE_ROOK, PieceClass.WHITE_QUEEN, PieceClass.WHITE_KING,
+        )
+        return blackLum > whiteLum
     }
 
     /** Recognizes the live board using the stored templates. Returns null if
