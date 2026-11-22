@@ -142,6 +142,54 @@ object BoardSanity {
             }
         }
 
+        val fromRow = fromIdx / 8
+        val fromCol = fromIdx % 8
+        val toRow = toIdx / 8
+        val toCol = toIdx % 8
+        val totalDRow = toRow - fromRow   // row0 = rank8 ... row7 = rank1, so White moves toward DECREASING row
+        val totalDCol = toCol - fromCol
+        val adRow = kotlin.math.abs(totalDRow)
+        val adCol = kotlin.math.abs(totalDCol)
+
+        // The sliding-path check below only makes sense for a move that's
+        // ALREADY a straight line or diagonal - it works by stepping a fixed
+        // (row,col) delta until it lands on the destination. Given a
+        // geometrically bogus delta (e.g. a 2-files/1-rank "queen move",
+        // which is really a knight's shape), that stepping walks clean off
+        // the board without ever exactly matching the target square, and
+        // previously just silently fell through with nothing flagged - a
+        // real gap that let an impossible move (seen live: a queen "moving"
+        // d1-f2 on the opening position) pass straight through unchecked.
+        // Validating the move matches the mover's actual movement pattern
+        // first closes that gap for every piece type, not just sliders.
+        val patternOk = when (mover) {
+            PieceClass.WHITE_KNIGHT, PieceClass.BLACK_KNIGHT ->
+                (adRow == 2 && adCol == 1) || (adRow == 1 && adCol == 2)
+            PieceClass.WHITE_BISHOP, PieceClass.BLACK_BISHOP ->
+                adRow == adCol && adRow != 0
+            PieceClass.WHITE_ROOK, PieceClass.BLACK_ROOK ->
+                (totalDRow == 0) != (totalDCol == 0)
+            PieceClass.WHITE_QUEEN, PieceClass.BLACK_QUEEN ->
+                (adRow == adCol && adRow != 0) || ((totalDRow == 0) != (totalDCol == 0))
+            PieceClass.WHITE_KING, PieceClass.BLACK_KING ->
+                (adRow <= 1 && adCol <= 1 && (adRow != 0 || adCol != 0)) ||
+                    (totalDRow == 0 && adCol == 2) // plain step, or a castling-shaped 2-file hop
+            PieceClass.WHITE_PAWN ->
+                (totalDCol == 0 && totalDRow == -1 && target.isEmpty) ||
+                    (totalDCol == 0 && totalDRow == -2 && fromRow == 6 && target.isEmpty) ||
+                    (adCol == 1 && totalDRow == -1) // capture, or en passant onto an empty square
+            PieceClass.BLACK_PAWN ->
+                (totalDCol == 0 && totalDRow == 1 && target.isEmpty) ||
+                    (totalDCol == 0 && totalDRow == 2 && fromRow == 1 && target.isEmpty) ||
+                    (adCol == 1 && totalDRow == 1)
+            else -> true // EMPTY_* can't be the mover - already rejected above
+        }
+        if (!patternOk) {
+            val pieceName = mover.name.replace('_', ' ').lowercase()
+            return "Engine's move ($fromSquare-$toSquare) isn't a shape a $pieceName can actually make - " +
+                "impossible for a real position. Recognition has misread this piece or square. Try recalibrating."
+        }
+
         // Sliding pieces (rook/bishop/queen): the real board must have a clear
         // path - a piece can never be recognized as legally "jumping" another
         // for Stockfish to have offered this move, so an occupied square in
@@ -150,16 +198,12 @@ object BoardSanity {
             mover == PieceClass.WHITE_BISHOP || mover == PieceClass.BLACK_BISHOP ||
             mover == PieceClass.WHITE_QUEEN || mover == PieceClass.BLACK_QUEEN
         if (isSlider) {
-            val fromRow = fromIdx / 8
-            val fromCol = fromIdx % 8
-            val toRow = toIdx / 8
-            val toCol = toIdx % 8
-            val dRow = Integer.signum(toRow - fromRow)
-            val dCol = Integer.signum(toCol - fromCol)
-            var row = fromRow + dRow
-            var col = fromCol + dCol
+            val stepRow = Integer.signum(totalDRow)
+            val stepCol = Integer.signum(totalDCol)
+            var row = fromRow + stepRow
+            var col = fromCol + stepCol
             while (row != toRow || col != toCol) {
-                if (row !in 0..7 || col !in 0..7) break // shouldn't happen for a real sliding move
+                if (row !in 0..7 || col !in 0..7) break // shouldn't happen - patternOk already guarantees a true line
                 val idx = row * 8 + col
                 if (idx in uncertainSquares) {
                     return "Recognition wasn't confident about a square on the $fromSquare-$toSquare path " +
@@ -172,8 +216,8 @@ object BoardSanity {
                         "on that line (often an edge file/rank read as empty from an imprecise calibration). " +
                         "Try recalibrating with the corner grid lines snapped exactly to the board's edges."
                 }
-                row += dRow
-                col += dCol
+                row += stepRow
+                col += stepCol
             }
         }
 

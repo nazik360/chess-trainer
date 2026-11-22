@@ -50,6 +50,18 @@ class CaptureService : Service() {
     private var engine: EngineProcess? = null
     private var engineReady = false
 
+    // If the recognized board hasn't changed since the last successful
+    // analysis, just keep showing that same result instead of re-running
+    // Stockfish and briefly flashing "Thinking…" - re-analyzing an unchanged
+    // position gains nothing (it's the same FEN), costs battery, and risks
+    // template-matching noise occasionally picking a different top move for
+    // the exact same pixels, which looked like the suggestion randomly
+    // flickering to "some other position" even though nothing on screen had
+    // actually moved.
+    private var lastAnalyzedBoard: Array<com.chesstrainer.vision.PieceClass>? = null
+    private var lastAnalyzedWhiteToMove: Boolean? = null
+    private var lastReadyState: AnalysisBus.State.Ready? = null
+
     private var screenWidth = 0
     private var screenHeight = 0
     private var screenDensity = 0
@@ -201,10 +213,22 @@ class CaptureService : Service() {
 
         workerHandler.post {
             try {
-                AnalysisBus.publish(AnalysisBus.State.Thinking)
                 val recognition = BoardRecognizer.recognizeBoardDetailed(this, frame, calib) ?: return@post
                 val board = recognition.board
 
+                val cachedReady = lastReadyState
+                if (cachedReady != null && lastAnalyzedBoard?.contentEquals(board) == true &&
+                    lastAnalyzedWhiteToMove == SessionSettings.whiteToMove
+                ) {
+                    // Nothing has actually changed on screen since the last
+                    // successful analysis - keep showing that same, already
+                    // validated suggestion instead of re-querying the engine
+                    // and flashing "Thinking…" for no reason.
+                    AnalysisBus.publish(cachedReady)
+                    return@post
+                }
+
+                AnalysisBus.publish(AnalysisBus.State.Thinking)
                 val implausibleReason = com.chesstrainer.vision.BoardSanity.checkPlausible(board, recognition.uncertainSquares)
                 if (implausibleReason != null) {
                     AnalysisBus.publish(AnalysisBus.State.Error(implausibleReason))
@@ -235,11 +259,13 @@ class CaptureService : Service() {
                     if (inconsistencyReason == null) {
                         val fromPt = BoardRecognizer.squareCenterOnScreen(from, calib)
                         val toPt = BoardRecognizer.squareCenterOnScreen(to, calib)
-                        AnalysisBus.publish(
-                            AnalysisBus.State.Ready(
-                                AnalysisBus.Suggestion(from, to, fromPt, toPt, result.scoreCp, result.scoreMate, result.depth)
-                            )
+                        val ready = AnalysisBus.State.Ready(
+                            AnalysisBus.Suggestion(from, to, fromPt, toPt, result.scoreCp, result.scoreMate, result.depth)
                         )
+                        lastAnalyzedBoard = board
+                        lastAnalyzedWhiteToMove = SessionSettings.whiteToMove
+                        lastReadyState = ready
+                        AnalysisBus.publish(ready)
                         return@post
                     }
                     lastReason = inconsistencyReason
