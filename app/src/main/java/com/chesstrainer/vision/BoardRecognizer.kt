@@ -183,12 +183,6 @@ object BoardRecognizer {
     fun recognizeBoard(context: Context, screenshot: Bitmap, calib: Calibration): Array<PieceClass>? =
         recognizeBoardDetailed(context, screenshot, calib)?.board
 
-    // If the second-closest template is within this fraction of the closest
-    // template's own distance, the match is a near-tie: recognition genuinely
-    // can't confidently tell which piece (or whether the square is empty) is
-    // shown there, as opposed to a clear, well-separated match.
-    private const val AMBIGUITY_RATIO = 1.15f
-
     /**
      * Full recognition result: the 64-square board, plus the set of square
      * indices (same a8->h1 row-major convention as the board array) whose
@@ -210,30 +204,78 @@ object BoardRecognizer {
      * square blocks a slide, and that kind of tie is common background
      * noise (lighting, a slightly imprecise calibration) that would
      * otherwise make the overlay refuse to show anything most of the time.
-     * Only an empty/occupied disagreement is actually dangerous here.
+     * Only an empty/occupied disagreement is actually dangerous here - and
+     * on some skins (flat, light-colored piece glyphs, e.g. a cream-white
+     * queen on a cream-white light square) that disagreement isn't even a
+     * near-tie: a truly empty square's overall brightness can land
+     * confidently closer to a light piece's template than to the empty-
+     * square template, which plain distance-based matching has no way to
+     * catch (see the variance-based gate in [recognizeBoardDetailed]).
      */
     data class Recognition(val board: Array<PieceClass>, val uncertainSquares: Set<Int>)
+
+    /** Luminance variance (not average - variance) of a cell's 8x8 sub-grid,
+     * ignoring the trailing avg-R/G/B features. An empty square is a flat
+     * color: low variance. Any piece glyph has internal edges/shading: higher
+     * variance. This is far more reliable for "is anything even there" than
+     * overall brightness, which is exactly what can fool plain nearest-
+     * template matching when a piece and the bare square are similarly
+     * colored overall (see [recognizeBoardDetailed]). */
+    private fun variance(vec: FloatArray): Float {
+        var sum = 0f
+        for (i in 0 until GRID * GRID) sum += vec[i]
+        val mean = sum / (GRID * GRID)
+        var sq = 0f
+        for (i in 0 until GRID * GRID) { val d = vec[i] - mean; sq += d * d }
+        return sq / (GRID * GRID)
+    }
 
     fun recognizeBoardDetailed(context: Context, screenshot: Bitmap, calib: Calibration): Recognition? {
         val templates = TemplateStore.load(context) ?: return null
         val board = warpToSquare(screenshot, calib)
         val cells = extractCellFeatures(board, calib.flipped)
 
+        val emptyEntries = templates.entries.filter { it.key.isEmpty }
+        val pieceEntries = templates.entries.filter { !it.key.isEmpty }
+
+        // Derive an occupied-vs-empty variance threshold from the templates
+        // themselves (their own stored sub-grid IS a valid sample to measure
+        // variance on) - no separate calibration step needed. Sits a third of
+        // the way from the empty templates' own (low) variance up toward the
+        // piece templates' (higher) variance; see occupancyGate below for how
+        // it's used, including a margin band around it treated as uncertain
+        // rather than confidently guessed either way.
+        val emptyVar = emptyEntries.map { variance(it.value) }.average().toFloat()
+        val pieceVar = pieceEntries.map { variance(it.value) }.takeIf { it.isNotEmpty() }?.average()?.toFloat()
+        val gate: Pair<Float, Float>? = if (pieceVar != null && pieceVar > emptyVar) {
+            val threshold = emptyVar + (pieceVar - emptyVar) * 0.35f
+            val margin = (pieceVar - emptyVar) * 0.15f
+            threshold to margin
+        } else null
+
         val resultBoard = Array(64) { PieceClass.EMPTY_LIGHT }
         val uncertain = mutableSetOf<Int>()
         for (i in 0 until 64) {
-            val sorted = templates.entries.sortedBy { (_, vec) -> distance(vec, cells[i]) }
-            val best = sorted.getOrNull(0)
-            resultBoard[i] = best?.key ?: PieceClass.EMPTY_LIGHT
+            val cellVar = variance(cells[i])
 
-            val second = sorted.getOrNull(1)
-            if (best != null && second != null && best.key.isEmpty != second.key.isEmpty) {
-                val bestD = distance(best.value, cells[i])
-                val secondD = distance(second.value, cells[i])
-                if (bestD > 0f && secondD < bestD * AMBIGUITY_RATIO) {
+            // Which pool of templates is even allowed to win this cell - see
+            // the class doc above for why this exists. Falls back to
+            // considering every template if a category is missing (shouldn't
+            // happen - captureTemplates always has both) or borderline.
+            val candidates: List<Map.Entry<PieceClass, FloatArray>>
+            if (gate != null) {
+                val (threshold, margin) = gate
+                if (kotlin.math.abs(cellVar - threshold) < margin) {
                     uncertain.add(i)
                 }
+                candidates = if (cellVar < threshold) emptyEntries else pieceEntries
+            } else {
+                candidates = templates.entries.toList()
             }
+
+            val sorted = candidates.sortedBy { (_, vec) -> distance(vec, cells[i]) }
+            val best = sorted.getOrNull(0)
+            resultBoard[i] = best?.key ?: PieceClass.EMPTY_LIGHT
         }
         return Recognition(resultBoard, uncertain)
     }
