@@ -62,6 +62,18 @@ class CaptureService : Service() {
     private var lastAnalyzedWhiteToMove: Boolean? = null
     private var lastReadyState: AnalysisBus.State.Ready? = null
 
+    // A single capture can land mid-animation (a piece still sliding between
+    // squares, the board mid-reload) and produce a confidently-wrong read
+    // that isn't a near-tie and isn't implausible on its own - just a
+    // one-frame glitch (e.g. e7 briefly reads as occupied the instant after
+    // its pawn has moved to e5, or the very first frame of a fresh game
+    // catches the board still rendering). Requiring the SAME reading on two
+    // captures in a row before trusting it as a real, settled position
+    // filters that out, since an animation frame essentially never repeats
+    // identically on the next tick.
+    private var pendingBoard: Array<com.chesstrainer.vision.PieceClass>? = null
+    private var pendingBoardSeenCount = 0
+
     private var screenWidth = 0
     private var screenHeight = 0
     private var screenDensity = 0
@@ -216,6 +228,22 @@ class CaptureService : Service() {
                 val recognition = BoardRecognizer.recognizeBoardDetailed(this, frame, calib) ?: return@post
                 val board = recognition.board
 
+                if (pendingBoard == null || !pendingBoard.contentEquals(board)) {
+                    pendingBoard = board
+                    pendingBoardSeenCount = 1
+                    // Not confirmed stable yet - keep showing whatever was
+                    // last confirmed good (or just "Thinking" on the very
+                    // first frame) instead of reacting to a possibly
+                    // transient, mid-animation read.
+                    AnalysisBus.publish(lastReadyState ?: AnalysisBus.State.Thinking)
+                    return@post
+                }
+                pendingBoardSeenCount++
+                if (pendingBoardSeenCount < STABILITY_FRAMES) {
+                    AnalysisBus.publish(lastReadyState ?: AnalysisBus.State.Thinking)
+                    return@post
+                }
+
                 val cachedReady = lastReadyState
                 if (cachedReady != null && lastAnalyzedBoard?.contentEquals(board) == true &&
                     lastAnalyzedWhiteToMove == SessionSettings.whiteToMove
@@ -235,8 +263,19 @@ class CaptureService : Service() {
                     return@post
                 }
 
+                val engineInstance = engine
+                if (engineInstance == null) {
+                    // Mid-restart (see restartEngineAsync, which runs async) -
+                    // not a new failure, just a brief gap. Don't alarm the
+                    // user with a "crashed" message for this; keep showing
+                    // the last good suggestion and it'll pick back up once
+                    // the restart finishes.
+                    AnalysisBus.publish(lastReadyState ?: AnalysisBus.State.Thinking)
+                    return@post
+                }
+
                 val fen = FenBuilder.build(board, SessionSettings.whiteToMove)
-                val candidates = engine?.analyzeFenCandidates(fen, SessionSettings.moveTimeMs) ?: emptyList()
+                val candidates = engineInstance.analyzeFenCandidates(fen, SessionSettings.moveTimeMs)
                 if (candidates.isEmpty()) {
                     AnalysisBus.publish(AnalysisBus.State.Error("Engine returned no move for this position (it may have crashed - check the app's earlier setup steps, or try recalibrating)"))
                     return@post
@@ -329,6 +368,7 @@ class CaptureService : Service() {
         private const val TAG = "CaptureService"
         private const val NOTIF_ID = 42
         private const val MAX_RESTART_ATTEMPTS = 3
+        private const val STABILITY_FRAMES = 2
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_RESULT_DATA = "result_data"
 
